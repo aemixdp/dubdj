@@ -2,6 +2,7 @@
 
 const cluster = require('cluster');
 const fs = require('fs');
+const express = require('express');
 const DubAPI = require('dubapi');
 const Youtube = require('youtube-api');
 const config = require('./config');
@@ -13,8 +14,10 @@ Youtube.authenticate({
 
 if (cluster.isMaster) {
     var botsCount = config.profiles.length;
+    var workers = new Map();
     for (let i = 0; i < botsCount; ++i) {
         const worker = cluster.fork();
+        workers.set(config.profiles[i].credentials.username, worker);
         worker.on('online', () => {
             worker.send({
                 type: 'profile-index',
@@ -25,15 +28,57 @@ if (cluster.isMaster) {
     cluster.on('exit', (worker) => {
         console.log(`worker ${worker.process.pid} died`);
     });
+    setupApi(workers);
 } else {
+    var dubapi;
     process.on('message', (msg) => {
         if (msg.type == 'profile-index') {
-            start(config.profiles[msg.data]);
+            startBot(config.profiles[msg.data], (client) => {
+                dubapi = client;
+            });
+        } else if (dubapi) {
+            if (msg.type == 'pause') {
+                pause(dubapi);
+            } else if (msg.type == 'unpause') {
+                unpause(dubapi);
+            } else if (msg.type == 'say') {
+                say(dubapi, msg.data);
+            }
         }
     });
 }
 
-function start (profile) {
+function setupApi (workers) {
+    var app = express();
+    app.use((req, res, next) => {
+        if (req.query.pw == config.apiPassword) {
+            next();
+        } else {
+            res.status(401).send('Wrong password!');
+        }
+    });
+    app.get('/pause', (req, res) => {
+        workers.get(req.query.bot).send({type: 'pause'});
+        res.sendStatus(200);
+    });
+    app.get('/unpause', (req, res) => {
+        workers.get(req.query.bot).send({type: 'unpause'});
+        res.sendStatus(200);
+    });
+    app.get('/say', (req, res) => {
+        workers.get(req.query.bot).send({
+            type: 'say',
+            data: req.query.msg
+        });
+        res.sendStatus(200);
+    });
+    app.listen(
+        process.env.OPENSHIFT_NODEJS_PORT || 8080,
+        process.env.OPENSHIFT_NODEJS_IP || '127.0.0.1'
+    );
+}
+
+function startBot (profile, callback) {
     new DubAPI({
         username: profile.credentials.username,
         password: profile.credentials.password
@@ -63,12 +108,13 @@ function start (profile) {
                 setTimeout(() => dubapi.updub(), 30000 * Math.random());
             }
         });
+        callback(dubapi);
     });
 }
 
-function unpause (dubapi, callback) {
+function setQueuePausedState (dubapi, state, callback) {
     var endpoint = `room/${dubapi._.room.id}/queue/pause`;
-    var formData = {queuePaused: 0};
+    var formData = {queuePaused: state};
     dubapi._.reqHandler.queue({method: 'PUT', url: endpoint, form: formData}, (code, body) => {
         if (body && body.data && body.data.err) {
             console.error(code + ': ' + body.data.err);
@@ -76,6 +122,13 @@ function unpause (dubapi, callback) {
             callback();
         }
     });
+}
+
+const pause = (dubapi, callback) => setQueuePausedState(dubapi, 1, callback);
+const unpause = (dubapi, callback) => setQueuePausedState(dubapi, 0, callback);
+
+function say (dubapi, message) {
+    dubapi.sendChat(message);
 }
 
 function queueSong (dubapi, id, type, callback) {
