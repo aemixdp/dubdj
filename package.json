@@ -1,0 +1,15 @@
+{
+  "name": "dubdj",
+  "version": "1.0.0",
+  "description": "",
+  "main": " --harmony server.js",
+  "scripts": {
+    "start": "node --harmony .\\server.js"
+  },
+  "author": "aemxdp <aemxdp@gmail.com>",
+  "license": "WTFPL",
+  "dependencies": {
+    "dubapi": "^1.2.0",
+    "youtube-api": "^1.4.0"
+  }
+}
